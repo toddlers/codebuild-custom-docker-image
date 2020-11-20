@@ -26,7 +26,9 @@
 
 #### Note:
  * As of now `AWS Chabot` is not supported via terraform[1] because there is no support via AWS Go SDK[2]. So this might look more cleaner in `terraform`.
+ * There might be in future AWS will deliver Public Container Registry[3], till then this helps us to keep things running.
  
  
 1. https://github.com/hashicorp/terraform-provider-aws/issues/12304
 2.  https://github.com/aws/aws-sdk-go/issues/3582
+3.  https://aws.amazon.com/blogs/containers/advice-for-customers-dealing-with-docker-hub-rate-limits-and-a-coming-soon-announcement/
