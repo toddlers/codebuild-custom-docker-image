@@ -1,0 +1,459 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: >-
+  Nightly Builds of Custom Docker Images
+
+Metadata:
+
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Installation
+        Parameters:
+          - InstallationId
+          - Environment
+          - LogsRetentionPeriod
+          - ContainerRepositoryName
+          - TerraformVersion
+          - TfenvVersion
+          - SlackChannelId
+          - SlackWorkpaceId
+          - SlackConfigurationName
+          - ChatBotLoggingLevel
+    ParameterLabels:
+      InstallationId:
+        default: Choose a name for this installation
+      Environment:
+        default: Deployment environment name
+      ContainerRepositoryName:
+        default: Container repository name
+      LogsRetentionPeriod:
+        default: The number of days to retain the log events in the specified log group
+      TerraformVersion:
+        default: Terraform version to bake inside the docker image
+      TfenvVersion:
+        default: Tfenv version to bake inside the docker image
+      SlackChannelId:
+        default: Slack channel Id
+      SlackWorkpaceId:
+        default : Slack workspace Id
+      SlackConfigurationName:
+        default: Slack Configuration name
+      ChatBotLoggingLevel:
+        default: Chatbot logging level
+
+Parameters:
+  InstallationId:
+    Type: String
+    Description: >-
+      An arbitrary short technical name for this installation.
+      Used to generate (parts of) the names of same resources.
+    AllowedPattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
+    MaxLength: 20
+    ConstraintDescription: >-
+      The installation id must consist only of lowercase letters, digits and dashes.
+      It cannot start or end in an dash or be longer than twenty characters.
+  Environment:
+    Type: String
+    Description: >-
+      Deployment environment name
+    AllowedPattern: "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
+    MaxLength: 20
+  ContainerRepositoryName:
+    Type: String
+    Description: Container repository name
+    Default: "docker-images"
+  LogsRetentionPeriod:
+    Description: >-
+      The number of days to retain the log events in the specified log group. Possible
+      values are: 1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, and 3653.
+    Type: String
+    Default: 14
+  TerraformVersion:
+    Description: Terraform version to bake inside the docker image
+  TfenvVersion:
+    Description: Tfenv version to bake inside the docker image
+  SlackConfigurationName:
+    Type: String
+    Description: The name of the configuration.
+  ChatBotLoggingLevel:
+    Type: String
+    Description: >-
+      Specifies the logging level for this configuration. This property affects the log entries pushed to
+      Amazon CloudWatch Logs. Logging levels include ERROR, INFO, or NONE.
+    AllowedValues:
+      - ERROR
+      - INFO
+      - NONE
+  SlackChannelId:
+    Type: String
+    Description: >-
+      The ID of the Slack channel. To get the ID, open Slack, right click on the channel name in the 
+      left pane, then choose Copy Link. The channel ID is the 9-character string at the end of the URL.
+      For example, ABCBBLZZZ.
+  SlackWorkspaceId:
+    Type: String
+    Description: >-
+      The ID of the Slack workspace authorized with AWS Chatbot. To get the workspace ID, you must 
+      perform the initial authorization flow with Slack in the AWS Chatbot console.
+      Then you can copy and paste the workspace ID from the console. For more details, 
+      see steps 1-4 in Setting Up AWS Chatbot with Slack in the AWS Chatbot User Guide.
+  # SnsTopicArn:
+  #   Type: CommaDelimitedList
+  #   Description: The ARNs of the SNS topics that deliver notifications to AWS Chatbot.
+
+Resources:
+  EventRole:
+  Type: AWS::IAM::Role
+  Description: IAM role to allow Amazon CloudWatch Events to trigger AWS CodeBuild build
+  Properties:
+    AssumeRolePolicyDocument:
+      Statement:
+      - Action: sts:AssumeRole
+        Effect: Allow
+        Principal:
+          Service:
+          - events.amazonaws.com
+        Sid: 1
+    Policies:
+    - PolicyDocument:
+        Statement:
+        - Action:
+          - codebuild:StartBuild
+          Effect: Allow
+          Resource: !GetAtt 'BakeDockerImageCodeBuildProject.Arn'
+      PolicyName: !Join
+        - '-'
+        - - !Ref 'AWS::StackName'
+          - CloudWatchEventPolicy
+    RoleName: !Join
+      - '-'
+      - - !Ref 'AWS::StackName'
+        - CloudWatchEventRule
+    Tags:
+      - Key: Team
+        Value: DevOps
+      - Key: Application
+        Value: DockerImageAutomation
+      - Key: Environment
+        Value: !Ref Environment
+
+  CronBuildDockerImage:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: cron(0 0 * * ? *) # Run every day at 00:00:00
+      State: ENABLED
+      Name: !Join
+      - '-'
+      - - !Ref 'AWS::StackName'
+        - NightlyBuild
+      Targets:
+      - Arn: !GetAtt 'BakeDockerImageCodeBuildProject.Arn'
+        Id: NightlyCheck
+        RoleArn: !GetAtt 'EventRole.Arn'
+
+
+  # Service role for CodeBuild project
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: '/'
+      Policies:
+        - PolicyName: CodeBuildRunnerLogsPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !GetAtt BakeDockerImageCodeBuildLogGroup.Arn
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - sts:AssumeRole
+                Resource: !GetAtt ContainerRepository.Arn
+              - Effect: Allow
+                Action:
+                  - iam:GetRole
+                  - iam:CreateServiceLinkedRole
+                Resource: "*"
+      RoleName: !Join
+        - '-'
+        - - !Ref 'AWS::StackName'
+          - CodeBuildRole
+      Tags:
+        - Key: Team
+          Value: DevOps
+        - Key: Application
+          Value: DockerImageAutomation
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Container repository for storing the CodeBuild image
+  ContainerRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${ContainerRepositoryName}-${InstallationId}"
+      RepositoryPolicyText:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowPushPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - Ref: AWS::AccountId
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - "ecr:GetDownloadUrlForLayer"
+              - "ecr:BatchGetImage"
+              - "ecr:BatchCheckLayerAvailability"
+              - "ecr:PutImage"
+              - "ecr:InitiateLayerUpload"
+              - "ecr:UploadLayerPart"
+              - "ecr:CompleteLayerUpload"
+      Tags:
+        - Key: Team
+          Value: DevOps
+        - Key: Application
+          Value: DockerImageAutomation
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Log Group for Codebuild Job. This results into no orphaned log groups
+  BakeDockerImageCodeBuildLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/coodebuild/docker-image-builder-${InstallationId}"
+      RetentionInDays: !Ref LogsRetentionPeriod
+  
+  ChatBotLogGroup:
+  Type: AWS::Logs::LogGroup
+  Properties:
+    LogGroupName: !Sub "/aws/chatbot/devops-chatbot-${InstallationId}"
+    RetentionInDays: !Ref LogsRetentionPeriod
+
+  # CodeBuild project which builds the docker image for the ModulesRunner
+  BakeDockerImageCodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Description: !Join
+        - ''
+        - - 'CodeBuild Project for '
+          - !Ref 'AWS::StackName'
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        EnvironmentVariables:
+          - Name: TERRAFORM_VERSION
+            Type: PLAINTEXT
+            Value: !Ref TerraformVersion
+          - Name: TFENV_VERSION
+            Type: PLAINTEXT
+            Value: !Ref TfenvVersion
+        Image: "aws/codebuild/standard:2.0"
+        PrivilegedMode: true
+        Type: LINUX_CONTAINER
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref BakeDockerImageCodeBuildLogGroup
+        # S3Logs:
+        #   Location:
+        #     Fn::Sub: "${LogBucket}/codebuild/image-builder/build-log"
+        #   Status: ENABLED
+      Name: !Ref 'AWS::StackName'
+      ServiceRole:
+        Fn::GetAtt:
+          - "CodeBuildRole"
+          - "Arn"
+      Source:
+        BuildSpec:
+          Fn::Join:
+              - ""
+              - - |
+                  version: 0.2
+                  phases:
+                      install:
+                          runtime-versions:
+                              docker: 18
+                      pre_build:
+                          commands:
+                              - echo Login to AWS ECR
+                              - $(aws ecr get-login --no-include-email)
+                      build:
+                          commands:
+                              - echo Create Dockerfile
+                              - |
+                                  TPL="$(cat <<-EOF
+                                  FROM ubuntu
+                                  ENV DEBIAN_FRONTEND=noninteractive
+                                  ENV TZ=UTC
+                                  ENV TFENV_DIR=/root/.tfenv
+                                  ENV TFENV_VER=$TFENV_VERSION
+                                  RUN ln -sf /usr/share/zoneinfo/$TZ /etc/localtime
+                                  RUN apt-get update
+                                  RUN apt-get install -y $PACKAGES
+                                  RUN pip3 install --upgrade $PIP_PACKAGES
+                                  RUN ln -s /usr/bin/python3 /usr/bin/python
+                                  RUN mkdir \$TFENV_DIR \
+                                  && curl -sL https://github.com/tfutils/tfenv/archive/v\$TFENV_VER.tar.gz | tar xzvf - --strip-components=1 -C \$TFENV_DIR \
+                                  && ln -s \$TFENV_DIR/bin/tfenv /usr/local/sbin/tfenv \
+                                  && ln -s \$TFENV_DIR/bin/terraform /usr/local/sbin/terraform \
+                                  && tfenv install $TERRAFORM_VERSION \
+                                  && tfenv use $TERRAFORM_VERSION \
+                                  && tfenv --version && terraform --version
+                                  EOF
+                                  )"
+                              - echo "$TPL" | tee Dockerfile
+                              - echo Build docker image
+                              - docker build -t terraform:latest .
+                              - echo Tag docker image
+                - "            "
+                - Fn::Sub: "- docker tag terraform:latest ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/containers-${InstallationId}:terraform\n"
+                - "            - echo Push docker image to ECR\n"
+                - "            "
+                - Fn::Sub: "- docker push ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/containers-${InstallationId}:terraform"
+        Type: NO_SOURCE
+      Tags:
+        - Key: Team
+          Value: DevOps
+        - Key: Application
+          Value: DockerImageAutomation
+        - Key: Environment
+          Value: !Ref Environment
+
+    # SNS Topic for codebuild status
+  CodeBuildStatusUpdates:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Join
+        - '-'
+        - - !Ref 'AWS::StackName'
+          - CodeBuildStatusUpdates
+      Tags:
+        - Key: Team
+          Value: DevOps
+        - Key: Application
+          Value: DockerImageAutomation
+        - Key: Environment
+          Value: !Ref Environment
+
+  CodebuildStatusEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name:
+        Fn::Sub: "codebuild-status-events-${InstallationId}"
+      Description: "code build event rule for status"
+      State: "ENABLED"
+      EventPattern:
+        source:
+          - "aws.codebuild"
+        detail-type:
+          - "CodeBuild Build State Change"
+        detail:
+          build-status:
+            - "FAILED"
+            - "STOPPED"
+            - "SUCCEEDED"
+          project-name:
+                  - !Ref BakeDockerImageCodeBuildProject
+      Targets:
+        - 
+          Arn: 
+            Ref: "CodeBuildStatusUpdates"
+          Id: "CodeBuildStatusUpdates"
+
+  EventTopicPolicy:
+    Type: 'AWS::SNS::TopicPolicy'
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: 'sns:Publish'
+            Resource: '*'
+      Topics:
+        - !Ref CodeBuildStatusUpdates
+        
+  # Service-linked Role
+  ServiceLinkedRoleForChatbot:
+    Type: 'AWS::IAM::ServiceLinkedRole'
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Retain
+    Properties: 
+      AWSServiceName: management.chatbot.amazonaws.com
+      Description: The Service Linked Role used by AWS Chatbot.
+
+  # Service role for CodeBuild project
+  ChatBotRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - chatbot.amazonaws.com.com
+            Action:
+              - sts:AssumeRole
+      Path: '/'
+      Policies:
+        - PolicyName: ChatBotPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudwatch:Describe
+                  - cloudwatch:List*
+                  - cloudwatch:Get*
+                  - sns:Get*
+                Resource: *
+      RoleName: !Join
+        - '-'
+        - - !Ref 'AWS::StackName'
+          - ChatBotdRole
+      Tags:
+        - Key: Team
+          Value: DevOps
+        - Key: Application
+          Value: DockerImageAutomation
+        - Key: Environment
+          Value: !Ref Environment
+
+  SlackChannelConfiguration:
+    Type: AWS::Chatbot::SlackChannelConfiguration
+    Properties:
+      ConfigurationName: !Ref SlackConfigurationName
+      IamRoleArn: !Ref ChatBotRole
+      LoggingLevel: !Ref ChatBotLoggingLevel
+      SlackChannelId: !Ref SlackChannelId
+      SlackWorkspaceId: !Ref SlackWorkspaceId
+      SnsTopicArns: 
+        - !Ref CodeBuildStatusUpdates
