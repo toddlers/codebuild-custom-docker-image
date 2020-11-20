@@ -6,7 +6,7 @@ As pulling the docker images from dockerhub got throttled, so there is a high ch
 So CFN templates takes care of that. It creates following things for building the automation:
 
 1. ECR(EC2 Container Registry)
-2. A CodeBuild Project with `buildpec` inside for installing various tools like 
+2. A CodeBuild Project with `buildpec` inside for installing various tools like below which can be adjusted via the `Makefile`
   * Terraform
   * Tfenv
   * Boto3
@@ -14,7 +14,6 @@ So CFN templates takes care of that. It creates following things for building th
   * Golang
   * Jq
   * Unzip
-  They are configurable via the `Makefile`
 3. A `CloudWatch Crontab` entry to invoke the `CodeBuild` Job at midnight
 4. A `CloudWatch` event Rule catches the `CodeBuild`  status for following states:
   * FAILED
