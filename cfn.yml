@@ -105,39 +105,39 @@ Parameters:
 
 Resources:
   EventRole:
-  Type: AWS::IAM::Role
-  Description: IAM role to allow Amazon CloudWatch Events to trigger AWS CodeBuild build
-  Properties:
-    AssumeRolePolicyDocument:
-      Statement:
-      - Action: sts:AssumeRole
-        Effect: Allow
-        Principal:
-          Service:
-          - events.amazonaws.com
-        Sid: 1
-    Policies:
-    - PolicyDocument:
+    Type: AWS::IAM::Role
+    Description: IAM role to allow Amazon CloudWatch Events to trigger AWS CodeBuild build
+    Properties:
+      AssumeRolePolicyDocument:
         Statement:
-        - Action:
-          - codebuild:StartBuild
+        - Action: sts:AssumeRole
           Effect: Allow
-          Resource: !GetAtt 'BakeDockerImageCodeBuildProject.Arn'
-      PolicyName: !Join
+          Principal:
+            Service:
+            - events.amazonaws.com
+          Sid: 1
+      Policies:
+      - PolicyDocument:
+          Statement:
+          - Action:
+            - codebuild:StartBuild
+            Effect: Allow
+            Resource: !GetAtt 'BakeDockerImageCodeBuildProject.Arn'
+        PolicyName: !Join
+          - '-'
+          - - !Ref 'AWS::StackName'
+            - CloudWatchEventPolicy
+      RoleName: !Join
         - '-'
         - - !Ref 'AWS::StackName'
-          - CloudWatchEventPolicy
-    RoleName: !Join
-      - '-'
-      - - !Ref 'AWS::StackName'
-        - CloudWatchEventRule
-    Tags:
-      - Key: Team
-        Value: DevOps
-      - Key: Application
-        Value: DockerImageAutomation
-      - Key: Environment
-        Value: !Ref Environment
+          - CloudWatchEventRule
+      Tags:
+        - Key: Team
+          Value: DevOps
+        - Key: Application
+          Value: DockerImageAutomation
+        - Key: Environment
+          Value: !Ref Environment
 
   CronBuildDockerImage:
     Type: AWS::Events::Rule
